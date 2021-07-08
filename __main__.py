@@ -1,182 +1,239 @@
-PAIR = 'USDT'
+UPDATE_DELAY = 60
+BOT_INTERVAL = '1m'
+DEFAULT_CURRENCY = 'USDT'
 
+import time
+import shlex
 import os
-from dotenv import load_dotenv
-from binance.client import Client
-from datetime import datetime
-import json
+import math
+import Binance
 
-load_dotenv('.env')
-API_KEY = os.getenv('API_KEY')
-API_SECRET = os.getenv('API_SECRET')
+class Terminal():
+    def __init__(self):
+        self.original_balance = Binance.get_account_worth()
+        print(f'Balance: ${self.original_balance}')
 
-client = Client(api_key=API_KEY, api_secret=API_SECRET, tld='us')
-client.API_URL = 'https://testnet.binance.vision/api'
+    def help(self):
+        print('help     Shows this menu')
+        print('bal      Shows the user\'s balance')
+        print('worth    Shows the user\'s account worth')
+        print('price    Shows the price of a symbol')
+        print('signal   Shows a recommendation to trade the crypto')
+        print('orders   Shows existing orders')
+        print('status   Shows session profit')
+        print('buy      Buys shares of a crypto')
+        print('sell     Sells shares of a crypto')
+        print('cancel   Cancels an existing order')
+        print('reset    Resets session')
+        print('start    Starts the automatic trading bot')
+        print('cls      Clears the terminal')
+        print('exit     Exits the program')
 
-def get_price(symbol):
-    try:
-        price = client.get_avg_price(symbol=symbol + PAIR)
-        price = round(float(price['price']), 2)
-        return price
-    except:
-        return None
+    def get_account_balance(self, symbol=None):
+        try:
+            balance = Binance.get_account_balance()
+            if symbol:
+                shares = balance.get(symbol)
+                if shares:
+                    print(f'{symbol}: {shares}')
+                else:
+                    print(f'ERROR: You do not own {symbol}')
+            else:
+                for symbol, shares in balance.items():
+                    print(f'{symbol}: {shares}')
+        except Exception as error_message:
+            print(f'ERROR: Could not retrieve balance')
+            print(error_message)
 
-def get_balance(symbol=None):
-    balance = {}
-    for asset in client.get_account()['balances']:
-        if float(asset['free']) == 0:
-            continue
+    def get_account_worth(self):
+        try:
+            account_worth = Binance.get_account_worth()
+            print(f'Account Worth: ${account_worth}')
+        except Exception as error_message:
+            print(f'ERROR: Could not retrieve account worth')
+            print(error_message)
 
-        balance[asset['asset']] = float(asset['free'])
-    return not symbol and balance or balance.get(symbol)
+    def get_price(self, symbol=None):
+        if not symbol:
+            print('ERROR: Missing argument symbol')
+            return
 
-def buy_shares(symbol, shares=None):
-    try:
-        if shares:
-            try:
-                shares = float(shares)
-            except ValueError:
-                print('Could not convert shares to float')
-                return None
+        try:
+            price = Binance.get_price(symbol)
+            if price:
+                print(f'{symbol}: ${price}')
+            else:
+                print(f'ERROR: Could not retrieve price of {symbol}')
+        except Exception as error_message:
+            print(f'ERROR: Could not retrieve price of {symbol}')
+            print(error_message)
 
-            if shares <= 0:
-                print('Shares must be greater than 0')
-                return None
+    def get_indicator(self, symbol=None, interval=None, indicator=None):
+        if not symbol:
+            print('ERROR: Missing argument symbol')
+            return
+        elif not interval:
+            print('ERROR: Missing argument interval')
+            return
 
-        price = get_price(symbol)
-        if not price:
-            print('Could not find crypto')
-            return None
+        try:
+            indicators = Binance.get_indicator(symbol, interval)
+            print(indicator and indicators[indicator] or indicators)
+        except Exception as error_message:
+            print(f'ERROR: Could not retrieve analysis of {symbol}')
+            print(error_message)
 
-        order_shares = shares or get_balance()[PAIR] / price
+    def get_session(self):
+        new_balance = Binance.get_account_worth()
+        profit = round(new_balance - self.original_balance, 2)
+        profit_percent = round(profit / self.original_balance * 100, 2)
+        print(f'${profit} ({profit_percent}%)')
+ 
+    def get_orders(self, symbol= None):
+        if not symbol:
+            print('ERROR: Missing argument symbol')
+            return
 
-        order = client.create_order(
-            symbol=symbol+PAIR,
-            side='BUY',
-            type='LIMIT',
-            timeInForce='GTC',
-            quantity=order_shares,
-            price=price,
-        )
+        try:
+            for order in Binance.get_orders(symbol):
+                print(order)
+        except Exception as error_message:
+            print('ERROR: Could not retrieve orders')
+            print(error_message)
 
-        return order
-    except:
-        return None
+    def buy_shares(self, symbol=None, shares=None, price=None):
+        if not symbol:
+            print('Missing argument symbol')
+            return
+        elif not shares:
+            print('Missing argument shares')
+            return
+        elif not price:
+            print('Missing argument price')
+            return
 
-def sell_shares(symbol, shares=None):
-    try:
-        if shares:
-            try:
-                shares = float(shares)
-            except ValueError:
-                print('Could not convert shares to integer')
-                return None
+        try:
+            shares = float(shares)
+        except ValueError:
+            raise Exception('Could not convert shares to float')
 
-            if shares <= 0:
-                print('Shares must be greater than 0')
-                return None
+        try:
+            price = float(price)
+        except ValueError:
+            raise Exception('Could not convert price to float')
 
-        price = get_price(symbol)
-        if not price:
-            print('Could not find crypto')
-            return None
+        try:
+            order = Binance.buy_shares(symbol, shares, price)
+            if order:
+                processed_shares = float(order['executedQty'])
+                profit = shares * price
+                print(f'Buying {processed_shares}/{shares} shares of {symbol} at ${price} (-${profit})...')
+        except Exception as error_message:
+            print(f'ERROR: Could not process order')
+            print(error_message)
 
-        order_shares = shares or get_balance()[symbol]
+    def sell_shares(self, symbol=None, shares=None, price=None):
+        if not symbol:
+            print('Missing argument symbol')
+            return
+        elif not shares:
+            print('Missing argument shares')
+            return
+        elif not price:
+            print('Missing argument price')
+            return
 
-        order = client.create_order(
-            symbol=symbol+PAIR,
-            side='SELL',
-            type='LIMIT',
-            timeInForce='GTC',
-            quantity=order_shares,
-            price=price,
-        )
+        try:
+            shares = float(shares)
+        except ValueError:
+            raise Exception('Could not convert shares to float')
 
-        return order
-    except:
-        return None
+        try:
+            price = float(price)
+        except ValueError:
+            raise Exception('Could not convert price to float')
+
+        try:
+            order = Binance.sell_shares(symbol, shares, price)
+            if order:
+                processed_shares = float(order['executedQty'])
+                profit = shares * price
+                print(f'Selling {processed_shares}/{shares} shares of {symbol} at ${price} (+${profit})...')
+        except Exception as error_message:
+            print(f'ERROR: Could not process order')
+            print(error_message)
+
+    def cancel_order(self, symbol=None, order_id=None):
+        if not symbol:
+            print('ERROR: Missing argument symbol')
+            return
+        elif not order_id:
+            print('ERROR: Missing argument order_id')
+            return
+
+        try:
+            Binance.cancel_order(symbol, order_id)
+        except Exception as error_message:
+            print('ERROR: Could not cancel order')
+            print(error_message)
+
+    def reset_session(self):
+        self.original_balance = Binance.get_account_worth()
+        print(f'Balance: ${self.original_balance}')
+
+    def start_bot(self, symbol=None):
+        if not symbol:
+            print('ERROR: Missing argument symbol')
+            return
+
+        print('Starting bot...')
+        while True:
+            macd = Binance.get_indicator(symbol, BOT_INTERVAL, 'MACD')
+            price = Binance.get_price(symbol)
+            balance = Binance.get_account_balance()
+            shares_to_buy = math.floor(balance[DEFAULT_CURRENCY] / price)
+
+            if macd >= 0:         
+                self.buy_shares(symbol, shares_to_buy, price)
+            elif macd < 0:
+                self.sell_shares(symbol, shares_to_buy, price)
+            time.sleep(UPDATE_DELAY) 
+
+    def cls(self):
+        os.system('cls')
 
 def __main__():
+    terminal = Terminal()
     while True:
         input_text = input('$ ')
-        arguments = input_text.split(' ')
-        if arguments[0] == 'bal':
-            if len(arguments) > 1:
-                shares = get_balance(arguments[1])
-                if not shares:
-                    print('Crypto Not Owned')
-                    continue
-
-                print(shares)
-            else:
-                for symbol, shares in get_balance().items():
-                    print(symbol, shares)
+        arguments = shlex.split(input_text, posix=True)
+        
+        if arguments[0] == 'help':
+            terminal.help()
+        elif arguments[0] == 'bal':
+            terminal.get_account_balance(*arguments[1:])
+        elif arguments[0] == 'worth':
+            terminal.get_account_worth()
         elif arguments[0] == 'price':
-            if len(arguments) < 2:
-                print('Missing argument: symbol')
-                continue
-
-            price = get_price(arguments[1])
-            if not price:
-                print('Invalid symbol')
-                continue
-
-            print(f'${price}')
-        elif arguments[0] == 'buy':
-            shares = None
-            if len(arguments) > 2:
-                shares = arguments[2]
-
-            order = buy_shares(arguments[1], shares)
-            if not order:
-                continue
-
-            shares = float(order['origQty']) - float(order['executedQty'])
-            symbol = arguments[1]
-            price = float(order['price'])
-            profit = shares * price
-
-            print(f'Buying {shares} shares of {symbol} at ${price} (-${profit})...')
-        elif arguments[0] == 'sell':
-            shares = None
-            if len(arguments) > 2:
-                shares = arguments[2]
-
-            order = sell_shares(arguments[1], shares)
-            if not order:
-                continue
-
-            shares = float(order['origQty']) - float(order['executedQty'])
-            symbol = arguments[1]
-            price = float(order['price'])
-            profit = shares * price
-
-            print(f'Selling {shares} shares of {symbol} at ${price} (+${profit})...')
+            terminal.get_price(*arguments[1:])
+        elif arguments[0] == 'signal':
+            terminal.get_indicator(*arguments[1:])
         elif arguments[0] == 'orders':
-            if len(arguments) < 2:
-                print('Missing argument: symbol')
-                continue
-
-            for order in client.get_all_orders(symbol=arguments[1] + PAIR, limit=10):
-                time = datetime.fromtimestamp(order['time'] / 1000)
-                time = time.strftime('%m/%d/%y %I:%M:%U %p')
-
-                print(json.dumps({
-                    'time': time,
-                    'side': order['side'],
-                    'status': order['status'],
-                    'origQty': order['origQty'],
-                    'executedQty': order['executedQty'],
-                    'price': order['price'],
-                }, indent=4))
-        elif arguments[0] == 'help':
-            print('help     Shows this menu')
-            print('bal      Shows the user\'s balance')
-            print('price    Shows the price of a symbol')
-            print('buy      Buys shares of a crypto')
-            print('sell     Sells shares of a crypto')
-            print('orders   Shows existing orders')
-            print('exit     Exits the program')
+            terminal.get_orders(*arguments[1:])
+        elif arguments[0] == 'status':
+            terminal.get_session()
+        elif arguments[0] == 'buy':
+            terminal.buy_shares(*arguments[1:])
+        elif arguments[0] == 'sell':
+            terminal.sell_shares(*arguments[1:])
+        elif arguments[0] == 'cancel':
+            terminal.cancel_order(*arguments[1:])
+        elif arguments[0] == 'reset':
+            terminal.reset_session()
+        elif arguments[0] == 'start':
+            terminal.start_bot(*arguments[1:])
+        elif arguments[0] == 'cls':
+            terminal.cls()
         elif arguments[0] == 'exit':
             return
         else:
